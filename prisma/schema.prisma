@@ -1,0 +1,111 @@
+// prisma/schema.prisma — Gmail Portal Database Schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// User — authenticated via Google OAuth
+model User {
+  id        String   @id @default(cuid())
+  googleId  String   @unique
+  email     String   @unique
+  name      String
+  picture   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  accounts         GmailAccount[]
+  workflowSessions WorkflowSession[]
+
+  @@map("users")
+}
+
+// GmailAccount — each linked Gmail inbox
+model GmailAccount {
+  id           String        @id @default(cuid())
+  userId       String
+  email        String
+  name         String
+  picture      String?
+  accessToken  String        @db.Text
+  refreshToken String?       @db.Text
+  tokenExpiry  DateTime?
+  status       AccountStatus @default(ACTIVE)
+  note         String?       @db.Text
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  otpEntries    OtpEntry[]
+  workflowItems WorkflowItem[]
+
+  @@unique([userId, email])
+  @@map("gmail_accounts")
+}
+
+enum AccountStatus {
+  ACTIVE
+  IDLE
+  ERROR
+}
+
+// OtpEntry — OTP codes cached from Gmail
+model OtpEntry {
+  id          String   @id @default(cuid())
+  accountId   String
+  sender      String
+  senderEmail String
+  otpCode     String
+  subject     String
+  snippet     String   @db.Text
+  gmailMsgId  String
+  receivedAt  DateTime
+  fetchedAt   DateTime @default(now())
+
+  account GmailAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, gmailMsgId])
+  @@map("otp_entries")
+}
+
+// WorkflowSession — a bulk management run
+model WorkflowSession {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user  User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items WorkflowItem[]
+
+  @@map("workflow_sessions")
+}
+
+// WorkflowItem — per-account action state
+model WorkflowItem {
+  id          String         @id @default(cuid())
+  sessionId   String
+  accountId   String
+  action      WorkflowAction @default(PENDING)
+  completedAt DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  session WorkflowSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  account GmailAccount    @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, accountId])
+  @@map("workflow_items")
+}
+
+enum WorkflowAction {
+  PENDING
+  DONE
+  SKIPPED
+}
