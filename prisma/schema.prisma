@@ -8,23 +8,34 @@ datasource db {
   provider = "postgresql"
 }
 
-// User — authenticated via Google OAuth
+// User — one row per person who signs up from the homepage
+// The User's own Google email is their "primary" identity
 model User {
   id        String   @id @default(cuid())
   googleId  String   @unique
   email     String   @unique
   name      String
   picture   String?
+  role      UserRole @default(USER)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   accounts         GmailAccount[]
   workflowSessions WorkflowSession[]
+  notes            AccountNote[]
 
   @@map("users")
 }
 
-// GmailAccount — each linked Gmail inbox
+enum UserRole {
+  USER
+  ADMIN
+}
+
+// GmailAccount — all Gmail inboxes managed by a User
+// accountType = PRIMARY  → the inbox the user signed up with (1 per User)
+// accountType = SECONDARY → inboxes added later via "Add Account" (many per User)
+// userId ensures total isolation: a user ONLY sees rows where userId = their own id
 model GmailAccount {
   id           String        @id @default(cuid())
   userId       String
@@ -36,15 +47,25 @@ model GmailAccount {
   tokenExpiry  DateTime?
   status       AccountStatus @default(ACTIVE)
   note         String?       @db.Text
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
+  accountType  AccountType   @default(SECONDARY)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   otpEntries    OtpEntry[]
   workflowItems WorkflowItem[]
+  accountNote   AccountNote?
 
   @@unique([userId, email])
   @@map("gmail_accounts")
+}
+
+// PRIMARY = the email the User registered with on the homepage
+// SECONDARY = emails added later via the dashboard "Add Account" button
+enum AccountType {
+  PRIMARY
+  SECONDARY
 }
 
 enum AccountStatus {
@@ -53,7 +74,22 @@ enum AccountStatus {
   ERROR
 }
 
-// OtpEntry — OTP codes cached from Gmail
+// AccountNote — one persisted note per Gmail account stored in DB
+model AccountNote {
+  id        String   @id @default(cuid())
+  accountId String   @unique
+  userId    String
+  content   String   @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  account GmailAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  user    User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("account_notes")
+}
+
+// OtpEntry — OTP codes cached from Gmail inbox
 model OtpEntry {
   id          String   @id @default(cuid())
   accountId   String
@@ -72,7 +108,7 @@ model OtpEntry {
   @@map("otp_entries")
 }
 
-// WorkflowSession — a bulk management run
+// WorkflowSession — one bulk management run per User
 model WorkflowSession {
   id        String   @id @default(cuid())
   userId    String
@@ -87,7 +123,7 @@ model WorkflowSession {
   @@map("workflow_sessions")
 }
 
-// WorkflowItem — per-account action state
+// WorkflowItem — per-account action state inside a WorkflowSession
 model WorkflowItem {
   id          String         @id @default(cuid())
   sessionId   String

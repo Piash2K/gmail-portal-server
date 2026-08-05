@@ -5,12 +5,13 @@ import { fetchOtpsFromGmail } from "../../utils/gmail.util";
 import { AppError } from "../../utils/response.util";
 
 export class OtpsService {
-  // Get latest 5 OTPs for all user accounts (reads directly from database for instant performance)
+  // Get latest 5 OTPs for all accounts belonging to this user
+  // userId isolation: returns ONLY this user's own accounts
   async getAllOtps(userId: string) {
     const accounts = await prisma.gmailAccount.findMany({
       where: { userId },
-      select: { id: true, email: true, name: true, status: true, picture: true, note: true },
-      orderBy: { createdAt: "asc" },
+      select: { id: true, email: true, name: true, status: true, picture: true, note: true, accountType: true },
+      orderBy: [{ accountType: "asc" }, { createdAt: "asc" }],
     });
 
     const results = await Promise.all(

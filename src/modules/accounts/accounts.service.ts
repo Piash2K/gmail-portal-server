@@ -1,12 +1,13 @@
 // src/modules/accounts/accounts.service.ts — Accounts business logic
 
-import { AccountStatus } from "@prisma/client";
+import { AccountStatus, AccountType } from "@prisma/client";
 import prisma from "../../config/database";
 import { AppError } from "../../utils/response.util";
 import { verifyGoogleToken } from "../../config/google";
 
 export class AccountsService {
-  // List all Gmail accounts for a user
+  // List all accounts belonging to this user ONLY (primary + their secondary accounts)
+  // userId is the isolation key — users can NEVER see another user's accounts
   async listAccounts(userId: string) {
     return prisma.gmailAccount.findMany({
       where: { userId },
@@ -17,29 +18,41 @@ export class AccountsService {
         picture: true,
         status: true,
         note: true,
+        accountType: true,
         tokenExpiry: true,
         createdAt: true,
         updatedAt: true,
         _count: { select: { otpEntries: true } },
       },
-      orderBy: { createdAt: "asc" },
+      orderBy: [{ accountType: "asc" }, { createdAt: "asc" }],
     });
   }
 
-  // Add or update (upsert) a Gmail account by verifying its Google token
+  // Called when the logged-in primary user clicks "Add Account" from the dashboard
+  // The new email is saved as SECONDARY under the same userId — no new User row created
   async addAccount(
     userId: string,
     accessToken: string,
     refreshToken?: string
   ) {
-    // Verify token and get email info
     const googleUser = await verifyGoogleToken(accessToken);
 
     if (!googleUser.email) {
       throw new AppError("Could not get email from Google token.", 400);
     }
 
-    // Estimate token expiry (1 hour from now by default)
+    // Prevent re-adding the primary account as secondary
+    const primaryAccount = await prisma.gmailAccount.findFirst({
+      where: { userId, accountType: AccountType.PRIMARY },
+    });
+
+    if (primaryAccount && primaryAccount.email === googleUser.email) {
+      throw new AppError(
+        "This is already your primary account. Use 'Add Account' to add a different email.",
+        409
+      );
+    }
+
     const tokenExpiry = new Date(Date.now() + 3600 * 1000);
 
     const account = await prisma.gmailAccount.upsert({
@@ -51,6 +64,8 @@ export class AccountsService {
         status: AccountStatus.ACTIVE,
         name: googleUser.name ?? "Unknown",
         picture: googleUser.picture ?? null,
+        // Secondary type is enforced — cannot be changed back to primary via this route
+        accountType: AccountType.SECONDARY,
       },
       create: {
         userId,
@@ -61,6 +76,7 @@ export class AccountsService {
         refreshToken: refreshToken ?? null,
         tokenExpiry,
         status: AccountStatus.ACTIVE,
+        accountType: AccountType.SECONDARY,
       },
       select: {
         id: true,
@@ -69,6 +85,7 @@ export class AccountsService {
         picture: true,
         status: true,
         note: true,
+        accountType: true,
         createdAt: true,
       },
     });
@@ -76,7 +93,7 @@ export class AccountsService {
     return account;
   }
 
-  // Get a single account (must belong to user)
+  // Get a single account — must belong to this user
   async getAccount(userId: string, accountId: string) {
     const account = await prisma.gmailAccount.findFirst({
       where: { id: accountId, userId },
@@ -87,6 +104,7 @@ export class AccountsService {
         picture: true,
         status: true,
         note: true,
+        accountType: true,
         tokenExpiry: true,
         createdAt: true,
         _count: { select: { otpEntries: true } },
@@ -97,17 +115,21 @@ export class AccountsService {
     return account;
   }
 
-  // Delete a Gmail account
+  // Delete a Gmail account — must belong to this user
   async deleteAccount(userId: string, accountId: string): Promise<void> {
     const account = await prisma.gmailAccount.findFirst({
       where: { id: accountId, userId },
     });
     if (!account) throw new AppError("Account not found.", 404);
 
+    if (account.accountType === AccountType.PRIMARY) {
+      throw new AppError("Cannot delete your primary account.", 400);
+    }
+
     await prisma.gmailAccount.delete({ where: { id: accountId } });
   }
 
-  // Update account status
+  // Update account status — must belong to this user
   async updateStatus(
     userId: string,
     accountId: string,
@@ -125,12 +147,18 @@ export class AccountsService {
     });
   }
 
-  // Update or add note for account
+  // Save/update note for an account in the database
   async updateNote(userId: string, accountId: string, note: string) {
     const account = await prisma.gmailAccount.findFirst({
       where: { id: accountId, userId },
     });
     if (!account) throw new AppError("Account not found.", 404);
+
+    await prisma.accountNote.upsert({
+      where: { accountId },
+      update: { content: note },
+      create: { accountId, userId, content: note },
+    });
 
     return prisma.gmailAccount.update({
       where: { id: accountId },
@@ -139,12 +167,16 @@ export class AccountsService {
     });
   }
 
-  // Delete note for account
+  // Delete note for an account
   async deleteNote(userId: string, accountId: string) {
     const account = await prisma.gmailAccount.findFirst({
       where: { id: accountId, userId },
     });
     if (!account) throw new AppError("Account not found.", 404);
+
+    await prisma.accountNote.deleteMany({
+      where: { accountId, userId },
+    });
 
     return prisma.gmailAccount.update({
       where: { id: accountId },
