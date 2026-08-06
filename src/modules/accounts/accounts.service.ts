@@ -4,6 +4,7 @@ import { AccountStatus, AccountType } from "@prisma/client";
 import prisma from "../../config/database";
 import { AppError } from "../../utils/response.util";
 import { verifyGoogleToken } from "../../config/google";
+import { otpsService } from "../otps/otps.service";
 
 export class AccountsService {
   // List all accounts belonging to this user ONLY (primary + their secondary accounts)
@@ -88,6 +89,10 @@ export class AccountsService {
         accountType: true,
         createdAt: true,
       },
+    });
+
+    otpsService.refreshAccount(userId, account.id).catch((err) => {
+      console.warn("[Accounts] Async OTP fetch warning for added account:", err?.message ?? err);
     });
 
     return account;

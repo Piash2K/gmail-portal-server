@@ -13,7 +13,9 @@ const envSchema = z.object({
   JWT_EXPIRES_IN: z.string().default("7d"),
   GOOGLE_CLIENT_ID: z.string().min(1, "GOOGLE_CLIENT_ID is required"),
   GOOGLE_CLIENT_SECRET: z.string().min(1, "GOOGLE_CLIENT_SECRET is required"),
-  ALLOWED_ORIGINS: z.string().default("http://localhost:3000"),
+  ALLOWED_ORIGINS: z
+    .string()
+    .default("https://gmail-portal-gamma.vercel.app,http://localhost:3000"),
 });
 
 const parsed = envSchema.safeParse(process.env);

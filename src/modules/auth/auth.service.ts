@@ -5,6 +5,7 @@ import { verifyGoogleToken } from "../../config/google";
 import { signJwt } from "../../utils/token.util";
 import { AppError } from "../../utils/response.util";
 import prisma from "../../config/database";
+import { otpsService } from "../otps/otps.service";
 
 export class AuthService {
   // Called when a user signs up / logs in from the HOME PAGE
@@ -48,8 +49,9 @@ export class AuthService {
     });
 
     // Upsert the PRIMARY GmailAccount for this user (the inbox they signed up with)
+    let primaryAccount;
     try {
-      await prisma.gmailAccount.upsert({
+      primaryAccount = await prisma.gmailAccount.upsert({
         where: { userId_email: { userId: user.id, email: googleUser.email } },
         update: {
           accessToken,
@@ -69,6 +71,11 @@ export class AuthService {
           status: "ACTIVE",
           accountType: AccountType.PRIMARY,
         },
+      });
+
+      // Trigger async OTP fetch from Gmail for the primary inbox
+      otpsService.refreshAccount(user.id, primaryAccount.id).catch((err) => {
+        console.warn("[Auth] Async OTP fetch warning for primary account:", err?.message ?? err);
       });
     } catch (err) {
       console.error("[Auth] Failed to upsert primary GmailAccount:", err);
