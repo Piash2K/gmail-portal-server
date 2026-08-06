@@ -7,46 +7,9 @@ import { AppError } from "../../utils/response.util";
 export class WorkflowService {
   // Get active workflow session for user (includes all items, auto-syncing any new accounts)
   async getActiveSession(userId: string) {
-    let session = await prisma.workflowSession.findFirst({
-      where: { userId, isActive: true },
-      include: {
-        items: {
-          include: {
-            account: {
-              select: { id: true, email: true, name: true, status: true, picture: true },
-            },
-          },
-          orderBy: { createdAt: "asc" },
-        },
-      },
-      orderBy: { createdAt: "desc" },
-    });
-
-    if (!session) return null;
-    const currentSessionId = session.id;
-
-    // Ensure all user accounts have workflow items in active session
-    const userAccounts = await prisma.gmailAccount.findMany({
-      where: { userId },
-      select: { id: true },
-    });
-
-    const existingAccountIds = new Set(session.items.map((i) => i.accountId));
-    const missingAccounts = userAccounts.filter((a) => !existingAccountIds.has(a.id));
-
-    if (missingAccounts.length > 0) {
-      await prisma.workflowItem.createMany({
-        data: missingAccounts.map((acc) => ({
-          sessionId: currentSessionId,
-          accountId: acc.id,
-          action: WorkflowAction.PENDING,
-        })),
-        skipDuplicates: true,
-      });
-
-      // Refetch session after adding missing items
-      const reFetched = await prisma.workflowSession.findFirst({
-        where: { id: currentSessionId },
+    try {
+      let session = await prisma.workflowSession.findFirst({
+        where: { userId, isActive: true },
         include: {
           items: {
             include: {
@@ -57,12 +20,58 @@ export class WorkflowService {
             orderBy: { createdAt: "asc" },
           },
         },
+        orderBy: { createdAt: "desc" },
       });
-      if (reFetched) session = reFetched;
-    }
 
-    const progress = this.computeProgress(session.items);
-    return { session, progress };
+      if (!session) return null;
+      const currentSessionId = session.id;
+
+      // Ensure all user accounts have workflow items in active session
+      const userAccounts = await prisma.gmailAccount.findMany({
+        where: { userId },
+        select: { id: true },
+      });
+
+      const existingAccountIds = new Set((session.items || []).map((i) => i.accountId));
+      const missingAccounts = userAccounts.filter((a) => !existingAccountIds.has(a.id));
+
+      if (missingAccounts.length > 0) {
+        try {
+          await prisma.workflowItem.createMany({
+            data: missingAccounts.map((acc) => ({
+              sessionId: currentSessionId,
+              accountId: acc.id,
+              action: WorkflowAction.PENDING,
+            })),
+            skipDuplicates: true,
+          });
+
+          // Refetch session after adding missing items
+          const reFetched = await prisma.workflowSession.findFirst({
+            where: { id: currentSessionId },
+            include: {
+              items: {
+                include: {
+                  account: {
+                    select: { id: true, email: true, name: true, status: true, picture: true },
+                  },
+                },
+                orderBy: { createdAt: "asc" },
+              },
+            },
+          });
+          if (reFetched) session = reFetched;
+        } catch (syncErr) {
+          console.warn("[WorkflowService] Workflow item sync warning:", syncErr);
+        }
+      }
+
+      const progress = this.computeProgress(session.items || []);
+      return { session, progress };
+    } catch (err) {
+      console.error("[WorkflowService] getActiveSession error:", err);
+      return null;
+    }
   }
 
   // Create a new workflow session (deactivates any previous one)
